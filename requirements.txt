@@ -1,3 +1,4 @@
 pytrends
 pandas
 openpyxl
+urllib3<2.0
