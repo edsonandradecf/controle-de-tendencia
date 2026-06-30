@@ -1,0 +1,36 @@
+name: Relatorio Semanal de Tendencias
+
+on:
+  schedule:
+    # Toda segunda-feira às 08:00 (horário de Brasília = 11:00 UTC)
+    - cron: "0 11 * * 1"
+  workflow_dispatch:
+    # Permite rodar manualmente clicando em um botão no GitHub, pra testar
+
+jobs:
+  gerar-relatorio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar o script e enviar e-mail
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+        run: python relatorio_trends.py
+
+      - name: Guardar o relatório como anexo do GitHub (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-trends
+          path: relatorio_trends_*.xlsx
