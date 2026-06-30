@@ -46,7 +46,11 @@ except ImportError:
 CSV_CATEGORIAS = "categorias.csv"
 GEO = "BR"  # Brasil. Use "" para mundial.
 TIMEFRAME = "today 3-m"  # últimos 90 dias
-PAUSA_ENTRE_REQUISICOES = 2  # segundos, para não ser bloqueado pelo Google
+PAUSA_ENTRE_REQUISICOES = 30  # segundos - aumentado para evitar bloqueio 429 do Google
+TIMEOUT_REQUISICAO = (10, 25)  # (conexão, leitura) em segundos - evita travar pra sempre
+LIMITE_CATEGORIAS = None  # defina um número (ex: 10) para testar rápido, ou None para todas
+MAX_TENTATIVAS = 3  # quantas vezes tenta de novo se der erro 429
+PAUSA_APOS_429 = 60  # segundos de espera extra quando é bloqueado, antes de tentar de novo
 
 
 def classificar_tendencia(serie):
@@ -78,7 +82,10 @@ def classificar_tendencia(serie):
 
 def gerar_relatorio():
     categorias = pd.read_csv(CSV_CATEGORIAS)
-    pytrends = TrendReq(hl="pt-BR", tz=180)
+    if LIMITE_CATEGORIAS:
+        categorias = categorias.head(LIMITE_CATEGORIAS)
+
+    pytrends = TrendReq(hl="pt-BR", tz=180, timeout=TIMEOUT_REQUISICAO, retries=1, backoff_factor=0.5)
 
     resultados = []
     total = len(categorias)
@@ -86,38 +93,54 @@ def gerar_relatorio():
     for i, row in categorias.iterrows():
         categoria = row["categoria"]
         termo = row["termo_busca_google"]
+        categoria_ml = row.get("categoria_mercado_livre", "Outros")
         print(f"[{i+1}/{total}] Consultando: {termo}")
 
-        try:
-            pytrends.build_payload([termo], timeframe=TIMEFRAME, geo=GEO)
-            dados = pytrends.interest_over_time()
+        tentativa = 0
+        sucesso = False
 
-            if dados.empty:
+        while tentativa < MAX_TENTATIVAS and not sucesso:
+            tentativa += 1
+            try:
+                pytrends.build_payload([termo], timeframe=TIMEFRAME, geo=GEO)
+                dados = pytrends.interest_over_time()
+
+                if dados.empty:
+                    resultados.append({
+                        "Categoria ML": categoria_ml,
+                        "Categoria": categoria,
+                        "Termo pesquisado": termo,
+                        "Variação (%)": None,
+                        "Sinal de Compra": "Sem dados no Google Trends",
+                    })
+                    sucesso = True
+                    continue
+
+                serie = dados[termo]
+                variacao, sinal = classificar_tendencia(serie)
+
                 resultados.append({
+                    "Categoria ML": categoria_ml,
                     "Categoria": categoria,
                     "Termo pesquisado": termo,
-                    "Variação (%)": None,
-                    "Sinal de Compra": "Sem dados no Google Trends",
+                    "Variação (%)": variacao,
+                    "Sinal de Compra": sinal,
                 })
-                continue
+                sucesso = True
 
-            serie = dados[termo]
-            variacao, sinal = classificar_tendencia(serie)
-
-            resultados.append({
-                "Categoria": categoria,
-                "Termo pesquisado": termo,
-                "Variação (%)": variacao,
-                "Sinal de Compra": sinal,
-            })
-
-        except Exception as e:
-            resultados.append({
-                "Categoria": categoria,
-                "Termo pesquisado": termo,
-                "Variação (%)": None,
-                "Sinal de Compra": f"Erro: {e}",
-            })
+            except Exception as e:
+                if "429" in str(e) and tentativa < MAX_TENTATIVAS:
+                    print(f"  Bloqueado (429). Aguardando {PAUSA_APOS_429}s para tentar de novo...")
+                    time.sleep(PAUSA_APOS_429)
+                else:
+                    resultados.append({
+                        "Categoria ML": categoria_ml,
+                        "Categoria": categoria,
+                        "Termo pesquisado": termo,
+                        "Variação (%)": None,
+                        "Sinal de Compra": f"Erro: {e}",
+                    })
+                    sucesso = True  # desiste e segue pra próxima categoria
 
         time.sleep(PAUSA_ENTRE_REQUISICOES)
 
@@ -125,7 +148,18 @@ def gerar_relatorio():
     df = df.sort_values(by="Variação (%)", ascending=False, na_position="last")
 
     nome_arquivo = f"relatorio_trends_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
-    df.to_excel(nome_arquivo, index=False)
+
+    with pd.ExcelWriter(nome_arquivo, engine="openpyxl") as writer:
+        # Página 1: Resumo geral, todos os produtos ordenados pelo sinal de compra
+        df.to_excel(writer, sheet_name="Resumo", index=False)
+
+        # Uma página por categoria do Mercado Livre
+        for categoria_ml in df["Categoria ML"].dropna().unique():
+            df_categoria = df[df["Categoria ML"] == categoria_ml]
+            # Nome da aba não pode ter mais de 31 caracteres nem certos símbolos
+            nome_aba = str(categoria_ml)[:31]
+            df_categoria.to_excel(writer, sheet_name=nome_aba, index=False)
+
     print(f"\nRelatório salvo em: {nome_arquivo}")
     return nome_arquivo
 
