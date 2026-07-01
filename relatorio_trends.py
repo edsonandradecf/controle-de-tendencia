@@ -56,8 +56,9 @@ PAUSA_APOS_429 = 60  # segundos de espera extra quando é bloqueado, antes de te
 def classificar_tendencia(serie):
     """Compara a média das últimas 4 semanas com as 4 semanas anteriores."""
     if len(serie) < 8 or serie.sum() == 0:
-        return None, "Dados insuficientes"
+        return None, None, "Dados insuficientes"
 
+    volume_medio = round(serie.mean(), 1)
     ultimas_4 = serie[-4:].mean()
     anteriores_4 = serie[-8:-4].mean()
 
@@ -67,17 +68,17 @@ def classificar_tendencia(serie):
         variacao = ((ultimas_4 - anteriores_4) / anteriores_4) * 100
 
     if variacao >= 20:
-        sinal = "🔼 Forte alta - Compensa comprar"
+        obs = "🔼 Forte alta"
     elif variacao >= 5:
-        sinal = "↗ Leve alta"
+        obs = "↗ Leve alta"
     elif variacao <= -20:
-        sinal = "🔽 Forte queda - Evitar estoque"
+        obs = "🔽 Forte queda"
     elif variacao <= -5:
-        sinal = "↘ Leve queda"
+        obs = "↘ Leve queda"
     else:
-        sinal = "➡ Estável"
+        obs = "➡ Estável"
 
-    return round(variacao, 1), sinal
+    return volume_medio, round(variacao, 1), obs
 
 
 def gerar_relatorio():
@@ -110,21 +111,23 @@ def gerar_relatorio():
                         "Categoria ML": categoria_ml,
                         "Categoria": categoria,
                         "Termo pesquisado": termo,
+                        "Volume de Busca (0-100)": None,
                         "Variação (%)": None,
-                        "Sinal de Compra": "Sem dados no Google Trends",
+                        "Observação": "Sem dados no Google Trends",
                     })
                     sucesso = True
                     continue
 
                 serie = dados[termo]
-                variacao, sinal = classificar_tendencia(serie)
+                volume, variacao, obs = classificar_tendencia(serie)
 
                 resultados.append({
                     "Categoria ML": categoria_ml,
                     "Categoria": categoria,
                     "Termo pesquisado": termo,
+                    "Volume de Busca (0-100)": volume,
                     "Variação (%)": variacao,
-                    "Sinal de Compra": sinal,
+                    "Observação": obs,
                 })
                 sucesso = True
 
@@ -137,15 +140,21 @@ def gerar_relatorio():
                         "Categoria ML": categoria_ml,
                         "Categoria": categoria,
                         "Termo pesquisado": termo,
+                        "Volume de Busca (0-100)": None,
                         "Variação (%)": None,
-                        "Sinal de Compra": f"Erro: {e}",
+                        "Observação": f"Erro: {e}",
                     })
-                    sucesso = True  # desiste e segue pra próxima categoria
+                    sucesso = True
 
         time.sleep(PAUSA_ENTRE_REQUISICOES)
 
     df = pd.DataFrame(resultados)
-    df = df.sort_values(by="Variação (%)", ascending=False, na_position="last")
+    # Ordenar por volume de busca (prioridade) e variação como desempate
+    df = df.sort_values(
+        by=["Volume de Busca (0-100)", "Variação (%)"],
+        ascending=[False, False],
+        na_position="last"
+    )
 
     nome_arquivo = f"relatorio_trends_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
 
